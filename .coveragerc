@@ -1,0 +1,9 @@
+[run]
+branch = True
+source = main
+omit =
+    */tests/*
+    */site-packages/*
+
+[report]
+show_missing = True

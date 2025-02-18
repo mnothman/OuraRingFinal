@@ -26,6 +26,10 @@ for api calls need to call
 user_id = session.get("user_id")
 access_token = get_valid_access_token(user_id)
 
+!!!!!!!!!!!!!!!
+currently if user has any amount of data in db it doesnt fetch updated data, it says 14 day HR data already exists for user user@gmail.com. Skipping fetch (need some way to dynamically handle this)
+
+
 
 
 testing:
@@ -35,8 +39,7 @@ pytest test_oura_apiHeart.py
 
 for code coverage: (tests both for auth.py and oura_apiHeart.py)
 pip install pytest-cov
-pytest --cov=oura_apiHeart --cov=auth --cov-report=term-missing
-
+pytest --cov=main --cov-report=term-missing
 
 pylint for code qual 
 pip install pylint

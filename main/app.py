@@ -28,14 +28,15 @@ os.makedirs(DB_DIR, exist_ok=True)
 # Constants
 HEART_RATE_SPIKE_THRESHOLD_PERCENT = 20  # Percent above baseline to trigger "stress" alert
 FETCH_INTERVAL = 300  # 5 minutes in seconds
-BASELINE_DAYS = 14  # For rolling HR baseline over last 14 days
+BASELINE_HEART_DAYS = 14  # For rolling HR baseline over last 14 days
+BASELINE_STRESS_DAYS = 29  # For rolling stress baseline over last 29 days
 
 # School hour definitions (currently unused) -> implement later
 SCHOOL_HOURS = [(9, 0, 12, 30), (13, 0, 17, 0)]
 LUNCH_BREAK = (12, 30, 13, 0)
 
 
-def get_dynamic_baseline(user_id):
+def get_dynamic_heartrate_baseline(user_id):
     """
     Calculate the rolling baseline HR from the last 14 days for a given user.
     
@@ -44,7 +45,7 @@ def get_dynamic_baseline(user_id):
     """
     with sqlite3.connect(DB_FILE) as db_conn:
         db_cursor = db_conn.cursor()
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_DAYS)).isoformat()
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_HEART_DAYS)).isoformat()
         db_cursor.execute(
             "SELECT bpm FROM heart_rate WHERE user_id = ? AND timestamp >= ?",
             (user_id, cutoff_date),
@@ -58,6 +59,38 @@ def get_dynamic_baseline(user_id):
     baseline_hr = sum(heart_rates) / len(heart_rates)
     print(f"New Generated Baseline HR for {user_id}: {baseline_hr:.2f}")
     return baseline_hr
+
+
+def get_dynamic_stress_baseline(user_id):
+    """
+    Calculates the average 'stress_high' over the last BASELINE_STRESS_DAYS days
+    for a given user.
+    """
+    with sqlite3.connect(DB_FILE) as db_conn:
+        db_cursor = db_conn.cursor()
+
+        # Compare the date in 'daily_stress' (YYYY-MM-DD) to cutoff
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_STRESS_DAYS))
+        # Convert to YYYY-MM-DD for easier comparison
+        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+
+        db_cursor.execute(
+            """
+            SELECT stress_high FROM daily_stress
+            WHERE user_id = ?
+              AND date >= ?
+            """,
+            (user_id, cutoff_str),
+        )
+        stress_entries = [row[0] for row in db_cursor.fetchall()]
+
+    if not stress_entries:
+        print(f"No baseline stress data available for {user_id}.")
+        return None
+
+    average_stress = sum(stress_entries) / len(stress_entries)
+    print(f"New Generated Stress Baseline for {user_id}: {average_stress:.2f}")
+    return average_stress
 
 
 def is_school_hour():
@@ -101,7 +134,7 @@ def poll_oura_heart_rate(user_id):
         print(f"📊 Retrieved {len(heart_rate_data)} new HR records for {user_id}.")
 
         # Calculate rolling baseline
-        baseline_hr = get_dynamic_baseline(user_id)
+        baseline_hr = get_dynamic_heartrate_baseline(user_id)
         if not baseline_hr:
             print(f"Skipping stress detection; no baseline HR yet for {user_id}.")
             time.sleep(FETCH_INTERVAL)
@@ -119,6 +152,29 @@ def poll_oura_heart_rate(user_id):
                 )
 
         time.sleep(FETCH_INTERVAL)
+
+
+def poll_oura_daily_stress(user_id):
+    """
+    Periodically fetch daily stress data from Oura for a single user.
+    This runs, for instance, every 24 hours (or a smaller interval if you prefer).
+    """
+    from .oura_apiHeart import fetch_daily_stress  # Must come after the daily_stress logic
+
+    print(f"Starting daily-stress monitoring for user {user_id}...")
+
+    STRESS_FETCH_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
+
+    while True:
+        print(f"\n Fetching daily-stress data for user: {user_id}")
+        stress_data = fetch_daily_stress(user_id)
+
+        if isinstance(stress_data, dict) and "error" in stress_data:
+            print(f"Error fetching daily stress for {user_id}: {stress_data['error']}")
+        else:
+            print(f"Fetched or updated {len(stress_data)} daily stress records for {user_id}.")
+
+        time.sleep(STRESS_FETCH_INTERVAL)  # Wait this time before fetching again -> change to cron later
 
 
 @app.route("/data/real_time_heart_rate/<user_id>")
@@ -143,6 +199,59 @@ def get_real_time_heart_rate(user_id):
         return jsonify({"bpm": row[0], "timestamp": row[1]})
     return jsonify({"error": f"No heart-rate data available for {user_id}"}), 404
 
+
+@app.route("/data/stress_baseline/<user_id>")
+def get_stress_baseline_endpoint(user_id):
+    """
+    Returns the rolling daily stress baseline for the last BASELINE_STRESS_DAYS days.
+    """
+    baseline_stress = get_dynamic_stress_baseline(user_id)
+    if baseline_stress is None:
+        return jsonify({"error": f"No daily stress data for user: {user_id}"}), 404
+
+    return jsonify({
+        "user_id": user_id,
+        "days_used": BASELINE_STRESS_DAYS,
+        "stress_baseline": baseline_stress
+    })
+
+@app.route("/data/daily_stress/<user_id>")
+def get_daily_stress_records(user_id):
+    """
+    Returns all daily_stress entries for a user (e.g., last 30 days).
+    """
+    with sqlite3.connect(DB_FILE) as db_conn:
+        db_cursor = db_conn.cursor()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        db_cursor.execute(
+            """
+            SELECT date, stress_high, recovery_high, day_summary
+            FROM daily_stress
+            WHERE user_id = ?
+              AND date >= ?
+            ORDER BY date DESC
+            """,
+            (user_id, cutoff),
+        )
+        rows = db_cursor.fetchall()
+
+    if not rows:
+        return jsonify({"error": f"No daily stress data found for {user_id}"}), 404
+
+    # Format data into list of dicts
+    stress_records = []
+    for (date_str, stress_high, recovery_high, day_summary) in rows:
+        stress_records.append({
+            "date": date_str,
+            "stress_high": stress_high,
+            "recovery_high": recovery_high,
+            "day_summary": day_summary
+        })
+
+    return jsonify({
+        "user_id": user_id,
+        "records": stress_records
+    })
 
 if __name__ == "__main__":
     # Only run the pollers once the Flask server is started (and not on debug reload).
@@ -182,5 +291,14 @@ if __name__ == "__main__":
                     daemon=True
                 )
                 fetch_thread.start()
+
+                # Spin up thread to fetch daily stress data
+                # Fetches daily due to -> poll_oura_daily_stress
+                stress_thread = threading.Thread(
+                    target=poll_oura_daily_stress,
+                    args=(uid,),
+                    daemon=True
+                )
+                stress_thread.start()
 
     app.run(debug=True, port=5001)

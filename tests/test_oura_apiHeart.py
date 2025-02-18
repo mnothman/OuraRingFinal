@@ -7,15 +7,15 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-try:
-    import main.oura_apiHeart
-    oura_apiHeart = main.oura_apiHeart
-except ModuleNotFoundError as e:
-    print("Import Error: Could not find `main.oura_apiHeart`.")
-    print(f"Debug Info: sys.path = {sys.path}")
-    raise e
-
+from main import oura_apiHeart
 import requests_mock
+# try:
+#     import main.oura_apiHeart
+#     oura_apiHeart = main.oura_apiHeart
+# except ModuleNotFoundError as e:
+#     print("Import Error: Could not find `main.oura_apiHeart`.")
+#     print(f"Debug Info: sys.path = {sys.path}")
+#     raise e
 
 
 @pytest.fixture

@@ -57,7 +57,8 @@ def init_auth_db():
             access_token TEXT NOT NULL,
             refresh_token TEXT NOT NULL,
             expires_at INTEGER NOT NULL,
-            last_fetched_at TEXT DEFAULT NULL
+            last_fetched_at TEXT DEFAULT NULL,
+            last_fetched_stress_at TEXT DEFAULT NULL
         )
     ''')
     conn.commit()
