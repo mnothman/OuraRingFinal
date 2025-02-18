@@ -1,0 +1,20 @@
+.env
+authtextfile
+
+# Ignore Python cache directories
+__pycache__/
+*.py[cod]
+__pycache__
+*.pyc
+
+# Ignore virtual environment (optional)
+venv/
+.env/
+
+databases/auth.db
+databases/heart_rate.db
+
+databases/auth.db
+databases/heart_ratea.db
+
+.coverage
