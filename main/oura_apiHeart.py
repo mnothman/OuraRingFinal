@@ -8,7 +8,8 @@ import sqlite3
 import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from main.auth import get_valid_access_token
+from .auth import get_valid_access_token, get_user_id_from_token
+from fastapi import APIRouter, Header, HTTPException
 
 # Load environment variables
 load_dotenv()
@@ -29,6 +30,9 @@ API_BASE_URL = os.getenv("REAL_API_BASE")
 SCHOOL_HOURS = [(9, 0, 12, 30), (13, 0, 17, 0)]
 BASELINE_DAYS = 14
 STRESS_DAYS = 29
+
+# FastAPI router
+router = APIRouter()
 
 def init_db():
     """
@@ -71,7 +75,8 @@ def init_db():
 init_db()
 
 
-def fetch_baseline_heart_rate(user_id):
+@router.get("/baseline-heart-rate")
+def fetch_baseline_heart_rate(authorization: str = Header(None)):
     """
     Retrieves the rolling 14-day baseline heart rate for a given user.
 
@@ -81,6 +86,10 @@ def fetch_baseline_heart_rate(user_id):
     Returns:
         float | None: The average BPM over the past 14 days, or None if no data exists.
     """
+    user_id = get_user_id_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid authorization token")
+
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
@@ -90,8 +99,7 @@ def fetch_baseline_heart_rate(user_id):
     heart_rates = [row[0] for row in cursor.fetchall()]
     conn.close()
 
-    return sum(heart_rates) / len(heart_rates) if heart_rates else None
-
+    return {"baseline_heart_rate": sum(heart_rates) / len(heart_rates)} if heart_rates else None
 
 def store_heart_rate(user_id, data):
     """
@@ -120,15 +128,19 @@ def store_heart_rate(user_id, data):
     print(f"{inserted_count} new HR records added to 'heart_rate' for user: {user_id}")
 
 
-def fetch_daily_stress(user_id):
+@router.get("/daily-stress")
+def fetch_daily_stress(authorization: str = Header(None)):
     """
     Fetches daily stress data from the last known fetch date until 'today'.
     If none is known, fetches the last 29 days.
     """
+    user_id = get_user_id_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid authorization token")
+    
     access_token = get_valid_access_token(user_id)
     if not access_token:
-        return {"error": "Missing authentication token"}
-
+        raise HTTPException(status_code=401, detail="Missing authentication token")
     # Read last_fetched_stress_at from user_tokens
     conn = sqlite3.connect(AUTH_DB_FILE)
     cursor = conn.cursor()
@@ -161,12 +173,11 @@ def fetch_daily_stress(user_id):
     headers = {"Authorization": f"Bearer {access_token}"}
     params = {"start_date": start_date, "end_date": end_date}
 
-    print(f"Fetching stress data from {start_date} to {end_date} for user {user_id}")
-    response = requests.get(url, headers=headers, params=params, timeout=10)
-
-    if response.status_code != 200:
-        return {"error": f"Failed to fetch stress data: {response.status_code}",
-                "details": response.text}
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch stress data: {str(e)}")
 
     data = response.json().get("data", [])
     if not data:
@@ -241,7 +252,8 @@ def cleanup_old_data():
     conn.commit()
     conn.close()
 
-def fetch_all_heart_rate(user_id):
+@router.get("/heart-rate")
+def fetch_all_heart_rate(authorization: str = Header(None)):
     """
     Fetches and stores the last 14 days of heart rate data from the Oura API.
 
@@ -252,10 +264,13 @@ def fetch_all_heart_rate(user_id):
         dict | list: Returns a dictionary with an error message if authentication fails.
                      Otherwise, returns a list of heart rate records.
     """
+    user_id = get_user_id_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid authorization token")
+
     access_token = get_valid_access_token(user_id)
     if not access_token:
-        return {"error": "Missing authentication token"}
-
+        raise HTTPException(status_code=401, detail="Missing authentication token")
     headers = {"Authorization": f"Bearer {access_token}"}
     url = f"{API_BASE_URL}/heartrate"
 
@@ -265,20 +280,18 @@ def fetch_all_heart_rate(user_id):
 
     print(f"Fetching heart rate from {start_datetime} to {end_datetime} for user {user_id}")
 
-    response = requests.get(url, headers=headers, params=params, timeout=10)
-
     # Explicitly handle non-200 responses
     if response.status_code != 200:
-        return {
-            "error": f"Failed to fetch heart rate: {response.status_code}",
-            "details": response.text
-        }
+        raise HTTPException(status_code=400, detail=f"Failed to fetch heart rate: {response.status_code}")
 
     # Ensure the response contains valid JSON before proceeding
     try:
-        data = response.json().get("data", [])
-    except ValueError:
-        return {"error": "Invalid JSON response from Oura API"}
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch heart rate: {str(e)}")
+
+    data = response.json().get("data", [])
 
     if not data:
         return {"error": "No heart rate data returned from Oura API"}
@@ -303,7 +316,7 @@ def fetch_all_heart_rate(user_id):
 
     return filtered_data
 
-
+@router.get("/recent-heart-rate")
 def fetch_recent_heart_rate(user_id):
     """
     Fetches new heart rate data since the user's last fetched timestamp, with a 1-second overlap.
@@ -312,8 +325,7 @@ def fetch_recent_heart_rate(user_id):
     # Get or refresh the user’s access token
     access_token = get_valid_access_token(user_id)
     if not access_token:
-        return {"error": "Missing authentication token"}
-
+        raise HTTPException(status_code=401, detail="Missing authentication token")
     # Retrieve last_fetched_at from user_tokens
     conn = sqlite3.connect(AUTH_DB_FILE)
     cursor = conn.cursor()
