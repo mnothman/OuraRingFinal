@@ -20,6 +20,7 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from fastapi.security.utils import get_authorization_scheme_param
 from fastapi import Header
+from fastapi import APIRouter
 # Load env variables from .env file
 env_values = dotenv_values(".env")
 for key, value in env_values.items():
@@ -49,6 +50,7 @@ USER_INFO_URL = "https://api.ouraring.com/v2/usercollection/personal_info"
 
 SCOPES = "email personal daily heartrate workout tag session spo2Daily"
 
+router = APIRouter()
 
 def init_auth_db():
     """Initializes the database for storing user authentication tokens."""
@@ -270,7 +272,7 @@ def generate_state() -> str:
 
 # All endpoints below
 # Returns AUTH URL to client for the frontend to redirect to Oura's OAuth page
-@app.get("/login")
+@router.get("/login")
 def login():
     """
     Redirects the user to Oura's OAuth2 authorization page with a secure `state`.
@@ -292,7 +294,7 @@ def login():
     return RedirectResponse(url=auth_url)
 
 # need to redirect to react native app here ex. return RedirectResponse(url=f"https://my-app.com/oauth-callback?token={access_token}")
-@app.get("/callback")
+@router.get("/callback")
 def callback(code: str, state: Optional[str] = None):
     """
     Oura redirects back with `code` and `state` after user logs in.
@@ -363,7 +365,7 @@ def fetch_oura_user_email(access_token: str) -> Optional[str]:
     return None
 
 
-@app.get("/user-info")
+@router.get("/user-info")
 def get_user_info(user_id: str = Depends(get_user_id_from_token)):
     """
     Example protected endpoint that returns the Oura user info from DB.
@@ -381,7 +383,7 @@ def get_user_info(user_id: str = Depends(get_user_id_from_token)):
     return resp.json()
 
 # Triggers Oura refresh flow, updates db with new access token
-@app.get("/refresh")
+@router.get("/refresh")
 def refresh_oura_token(user_id: str):
     """
     Manually triggers a refresh for a user's Oura tokens if needed.
@@ -436,7 +438,7 @@ def refresh_oura_token(user_id: str):
     }
 
 # removes users row from db, invalidating current tokens
-@app.get("/logout")
+@router.get("/logout")
 def logout(user_id: str):
     """
     Logs out user and removes their tokens from the database.
@@ -449,8 +451,3 @@ def logout(user_id: str):
     conn.close()
 
     return {"message": f"User {user_id} logged out and token deleted"}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=5000)
