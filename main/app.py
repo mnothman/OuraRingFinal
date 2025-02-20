@@ -44,11 +44,58 @@ BASELINE_STRESS_DAYS = 29
 SCHOOL_HOURS = [(9, 0, 12, 30), (13, 0, 17, 0)]  # Unused, but preserved
 LUNCH_BREAK = (12, 30, 13, 0)                  # Unused, but preserved
 
+#  Startup Tasks
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    On startup, check for existing user tokens and start background pollers
+    for heart-rate and daily-stress data.
+    """
+    print("Checking user tokens in", AUTH_DB_FILE)
+
+    if not os.path.exists(AUTH_DB_FILE):
+        print("No auth.db found. No tokens => no pollers.")
+        yield
+        return
+
+    conn = sqlite3.connect(AUTH_DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM user_tokens")
+    active_users = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    if not active_users:
+        print("No active users found. Skipping pollers.")
+        yield
+        return
+
+    # If user has no HR data, fetch initial
+    from main.oura_apiHeart import fetch_all_heart_rate_internal
+
+    for uid in active_users:
+        # Check if user already has HR data, if not then fetch HR data for user
+        with sqlite3.connect(DB_FILE) as hr_conn:
+            hr_cursor = hr_conn.cursor()
+            hr_cursor.execute("SELECT COUNT(*) FROM heart_rate WHERE user_id = ?", (uid,))
+            record_count = hr_cursor.fetchone()[0]
+
+        if record_count == 0:
+            print(f"Fetching initial HR data for user {uid}")
+            fetch_all_heart_rate_internal(uid)
+        else:
+            print(f"14-day HR data already exists for user {uid}. Skipping initial fetch.")
+
+        # Spin up background tasks for each user
+        asyncio.create_task(poll_oura_heart_rate(uid))
+        asyncio.create_task(poll_oura_daily_stress(uid))
+        yield
+
 # Create the FastAPI app
 app = FastAPI(
     title="Oura Monitoring App",
     description="A production-grade FastAPI app to handle Oura OAuth, heart-rate polling, and daily stress data.",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS: allow React Native frontend to call API (modify security later)
@@ -254,50 +301,3 @@ def root():
     """
     return {"message": "Welcome to the Oura Monitoring FastAPI app!"}
 
-#  Startup Tasks
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    On startup, check for existing user tokens and start background pollers
-    for heart-rate and daily-stress data.
-    """
-    print("Checking user tokens in", AUTH_DB_FILE)
-
-    if not os.path.exists(AUTH_DB_FILE):
-        print("No auth.db found. No tokens => no pollers.")
-        yield
-        return
-
-    conn = sqlite3.connect(AUTH_DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT user_id FROM user_tokens")
-    active_users = [row[0] for row in cursor.fetchall()]
-    conn.close()
-
-    if not active_users:
-        print("No active users found. Skipping pollers.")
-        yield
-        return
-
-    # If user has no HR data, fetch initial
-    from main.oura_apiHeart import fetch_all_heart_rate_internal
-
-    for uid in active_users:
-        # Check if user already has HR data, if not then fetch HR data for user
-        with sqlite3.connect(DB_FILE) as hr_conn:
-            hr_cursor = hr_conn.cursor()
-            hr_cursor.execute("SELECT COUNT(*) FROM heart_rate WHERE user_id = ?", (uid,))
-            record_count = hr_cursor.fetchone()[0]
-
-        if record_count == 0:
-            print(f"Fetching initial HR data for user {uid}")
-            fetch_all_heart_rate_internal(uid)
-        else:
-            print(f"14-day HR data already exists for user {uid}. Skipping initial fetch.")
-
-        # Spin up background tasks for each user
-        asyncio.create_task(poll_oura_heart_rate(uid))
-        asyncio.create_task(poll_oura_daily_stress(uid))
-        yield
-
-app = FastAPI(lifespan=lifespan)

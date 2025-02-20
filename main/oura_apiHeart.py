@@ -67,6 +67,13 @@ def init_db():
         """
     )
 
+    # cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_ts ON heart_rate(user_id, timestamp);")
+    try:
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_ts ON heart_rate(user_id, timestamp);")
+    except sqlite3.IntegrityError as e:
+        print(f"Skipping index creation due to existing duplicates: {e}")
+
+
     conn.commit()
     conn.close()
 
@@ -157,6 +164,9 @@ def store_heart_rate(user_id, data):
     Args:
         user_id (str): The user identifier.
         data (list): A list of dictionaries containing heart rate data.
+
+    Returns:
+        int: The number of records inserted.
     """
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -165,7 +175,8 @@ def store_heart_rate(user_id, data):
     for entry in data:
         if entry["source"] not in ["workout", "sleep"]:
             cursor.execute(
-                "INSERT INTO heart_rate (user_id, timestamp, bpm, source) VALUES (?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO heart_rate (user_id, timestamp, bpm, source) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, timestamp) DO NOTHING",
                 (user_id, entry["timestamp"], entry["bpm"], entry["source"]),
             )
             inserted_count += 1
@@ -175,6 +186,7 @@ def store_heart_rate(user_id, data):
     cleanup_old_data()
 
     print(f"[store_heart_rate] Inserted {inserted_count} records for user {user_id}")
+    return inserted_count
 
 
 @router.get("/daily-stress")
@@ -359,6 +371,8 @@ def fetch_all_heart_rate_route(authorization: str = Header(None)):
         print(f"[Route] Updated last_fetched_at to {latest_ts} for user {user_id}")
 
     return filtered_data
+
+
 @router.get("/recent-heart-rate")
 def fetch_recent_heart_rate(user_id):
     """
@@ -408,23 +422,37 @@ def fetch_recent_heart_rate(user_id):
             return {"error": "No recent heart rate data returned from Oura API"}
 
         # Store new HR data
-        store_heart_rate(user_id, data)
+        # store_heart_rate(user_id, data)
+        num_inserted = store_heart_rate(user_id, data)
+        print(f"Stored {num_inserted} new HR records for {user_id}")
 
         # Update last_fetched_at with the max timestamp from the new data
-        latest_ts = max(entry["timestamp"] for entry in data)
-        print(f"Updating last_fetched_at to {latest_ts} for user {user_id}")
-
-        conn = sqlite3.connect(AUTH_DB_FILE)
+        conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE user_tokens
-            SET last_fetched_at = ?
-            WHERE user_id = ?
-        """, (latest_ts, user_id))
-        conn.commit()
+        cursor.execute(
+            "SELECT MAX(timestamp) FROM heart_rate WHERE user_id = ?", (user_id,)
+        )
+        latest_ts_row = cursor.fetchone()
         conn.close()
 
-        print(f"Stored {len(data)} new HR records for {user_id}")
+        latest_ts = latest_ts_row[0] if latest_ts_row and latest_ts_row[0] else None
+        if num_inserted > 0:
+            if latest_ts and latest_ts != last_fetched_at:
+                print(f"Updating last_fetched_at to {latest_ts} for user {user_id}...")
+                
+                conn = sqlite3.connect(AUTH_DB_FILE)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    UPDATE user_tokens SET last_fetched_at = ?
+                    WHERE user_id = ?
+                """, (latest_ts, user_id))
+                conn.commit()
+                conn.close()
+            else:
+                print(f"No timestamp change for user {user_id}. Skipping last_fetched_at update.")
+        else:
+            print("No actual new records inserted. Skipping last_fetched_at update.")
+
         return data
 
     return {"error": f"Failed to fetch heart rate: {response.status_code}", "details": response.text}
