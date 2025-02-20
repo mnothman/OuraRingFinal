@@ -1,104 +1,73 @@
 """
-This module defines a Flask app that fetches and monitors real-time heart rate data from Oura.
-It calculates baselines, identifies stress alerts, and exposes an endpoint for the latest HR data.
+This module defines a FastAPI app that fetches and monitors real-time heart rate data from Oura.
+It calculates baselines, identifies stress alerts, and exposes endpoints for heart rate data.
+Production-ready: uses OAuth2 tokens, background tasks, and Uvicorn server.
 """
 
 import os
-import time
 import sqlite3
-import threading
+import asyncio
 from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+import uvicorn
 import pytz
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 
-from flask import Flask, jsonify
+from .auth import router as auth_router
+from .oura_apiHeart import router as heart_router
+
 from dotenv import load_dotenv
+from .auth import get_user_id_from_token, get_valid_access_token
+from .oura_apiHeart import (
+    fetch_recent_heart_rate,
+    fetch_daily_stress_internal,
+)
 
+# Load environment variables from .env
 load_dotenv()
 
-app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY")
-
-# Paths & DB Setup
+# Directories & Databases
 DB_DIR = os.path.join(os.path.dirname(__file__), "..", "databases")
 AUTH_DB_FILE = os.path.join(DB_DIR, "auth.db")
 DB_FILE = os.path.join(DB_DIR, "heart_rate.db")
-
 os.makedirs(DB_DIR, exist_ok=True)
 
 # Constants
 HEART_RATE_SPIKE_THRESHOLD_PERCENT = 20  # Percent above baseline to trigger "stress" alert
 FETCH_INTERVAL = 300  # 5 minutes in seconds
-BASELINE_HEART_DAYS = 14  # For rolling HR baseline over last 14 days
-BASELINE_STRESS_DAYS = 29  # For rolling stress baseline over last 29 days
+STRESS_FETCH_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
+BASELINE_HEART_DAYS = 14
+BASELINE_STRESS_DAYS = 29
+SCHOOL_HOURS = [(9, 0, 12, 30), (13, 0, 17, 0)]  # Unused, but preserved
+LUNCH_BREAK = (12, 30, 13, 0)                  # Unused, but preserved
 
-# School hour definitions (currently unused) -> implement later
-SCHOOL_HOURS = [(9, 0, 12, 30), (13, 0, 17, 0)]
-LUNCH_BREAK = (12, 30, 13, 0)
+# Create the FastAPI app
+app = FastAPI(
+    title="Oura Monitoring App",
+    description="A production-grade FastAPI app to handle Oura OAuth, heart-rate polling, and daily stress data.",
+    version="1.0.0"
+)
+
+# CORS: allow React Native frontend to call API (modify security later)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # In production use frontend domain here
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_router, prefix="/auth")
+app.include_router(heart_router, prefix="/oura")
 
 
-def get_dynamic_heartrate_baseline(user_id):
+def is_school_hour() -> bool:
     """
-    Calculate the rolling baseline HR from the last 14 days for a given user.
-    
-    :param user_id: The user's unique identifier (e.g., email).
-    :return: Float representing the average BPM, or None if no data yet.
-    """
-    with sqlite3.connect(DB_FILE) as db_conn:
-        db_cursor = db_conn.cursor()
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_HEART_DAYS)).isoformat()
-        db_cursor.execute(
-            "SELECT bpm FROM heart_rate WHERE user_id = ? AND timestamp >= ?",
-            (user_id, cutoff_date),
-        )
-        heart_rates = [row[0] for row in db_cursor.fetchall()]
-
-    if not heart_rates:
-        print(f"No baseline HR data available for {user_id}.")
-        return None
-
-    baseline_hr = sum(heart_rates) / len(heart_rates)
-    print(f"New Generated Baseline HR for {user_id}: {baseline_hr:.2f}")
-    return baseline_hr
-
-
-def get_dynamic_stress_baseline(user_id):
-    """
-    Calculates the average 'stress_high' over the last BASELINE_STRESS_DAYS days
-    for a given user.
-    """
-    with sqlite3.connect(DB_FILE) as db_conn:
-        db_cursor = db_conn.cursor()
-
-        # Compare the date in 'daily_stress' (YYYY-MM-DD) to cutoff
-        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_STRESS_DAYS))
-        # Convert to YYYY-MM-DD for easier comparison
-        cutoff_str = cutoff_date.strftime("%Y-%m-%d")
-
-        db_cursor.execute(
-            """
-            SELECT stress_high FROM daily_stress
-            WHERE user_id = ?
-              AND date >= ?
-            """,
-            (user_id, cutoff_str),
-        )
-        stress_entries = [row[0] for row in db_cursor.fetchall()]
-
-    if not stress_entries:
-        print(f"No baseline stress data available for {user_id}.")
-        return None
-
-    average_stress = sum(stress_entries) / len(stress_entries)
-    print(f"New Generated Stress Baseline for {user_id}: {average_stress:.2f}")
-    return average_stress
-
-
-def is_school_hour():
-    """
-    Check if the current time is within SCHOOL_HOURS, excluding lunch.
-    (Currently unused in this code, but kept for future logic.)
-
-    :return: True if now is within SCHOOL_HOURS; otherwise False.
+    Check if now is in SCHOOL_HOURS, excluding lunch. 
+    (Unused, but left for future expansions.)
     """
     user_timezone = pytz.timezone("America/Los_Angeles")
     now_local = datetime.now(timezone.utc).astimezone(user_timezone)
@@ -109,196 +78,226 @@ def is_school_hour():
             return True
     return False
 
-
-def poll_oura_heart_rate(user_id):
+# Dynamic Baselines Helper Functions
+def get_dynamic_heartrate_baseline(user_id: str) -> Optional[float]:
     """
-    Continuously fetch recent Oura heart-rate data for a single user at intervals.
-    If the new HR is 20% above the rolling baseline, print a "stress alert."
-
-    :param user_id: The user for whom we are fetching HR data.
+    Calculate the rolling 14-day baseline HR for a user.
     """
-    from .oura_apiHeart import fetch_recent_heart_rate  # Late import to avoid circular dependency
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_HEART_DAYS)).isoformat()
+    cursor.execute(
+        "SELECT bpm FROM heart_rate WHERE user_id = ? AND timestamp >= ?",
+        (user_id, cutoff_date),
+    )
+    heart_rates = [row[0] for row in cursor.fetchall()]
+    conn.close()
 
-    print(f"Starting heart-rate monitoring for user {user_id}...")
+    if not heart_rates:
+        return None
 
+    baseline_hr = sum(heart_rates) / len(heart_rates)
+    return baseline_hr
+
+
+def get_dynamic_stress_baseline(user_id: str) -> Optional[float]:
+    """
+    Calculates the average 'stress_high' over the last BASELINE_STRESS_DAYS days.
+    """
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    cutoff_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_STRESS_DAYS))
+    cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+
+    cursor.execute(
+        """
+        SELECT stress_high FROM daily_stress
+        WHERE user_id = ?
+          AND date >= ?
+        """,
+        (user_id, cutoff_str),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    if not rows:
+        return None
+
+    stress_values = [r[0] for r in rows]
+    print(f"New Generated Stress Baseline for {user_id}: {stress_values:.2f}")
+    return sum(stress_values) / len(stress_values)
+
+# Background Tasks
+async def poll_oura_heart_rate(user_id: str):
+    """
+    Continuously fetch new Oura heart-rate data for the user at intervals.
+    If new HR is 20% above the rolling baseline, print "stress alert."
+    """
     while True:
-        print(f"\n⏳ Fetching recent heart-rate data for user: {user_id}")
-        heart_rate_data = fetch_recent_heart_rate(user_id)
-
-        # If there's an error, wait and retry
-        if isinstance(heart_rate_data, dict) and "error" in heart_rate_data:
-            print(f"Error fetching recent HR for {user_id}: {heart_rate_data['error']}")
-            time.sleep(FETCH_INTERVAL)
+        print(f"\nPolling heart rate for user {user_id}")
+        hr_data = fetch_recent_heart_rate(user_id)
+        if isinstance(hr_data, dict) and "error" in hr_data:
+            print(f"Error fetching HR for {user_id}: {hr_data['error']}")
+            await asyncio.sleep(FETCH_INTERVAL)
             continue
 
-        print(f"📊 Retrieved {len(heart_rate_data)} new HR records for {user_id}.")
+        if not hr_data:
+            print(f"No new HR data found for {user_id}.")
+            await asyncio.sleep(FETCH_INTERVAL)
+            continue
 
-        # Calculate rolling baseline
         baseline_hr = get_dynamic_heartrate_baseline(user_id)
-        if not baseline_hr:
-            print(f"Skipping stress detection; no baseline HR yet for {user_id}.")
-            time.sleep(FETCH_INTERVAL)
-            continue
-
-        # Check for stress threshold
-        threshold = baseline_hr * (1 + (HEART_RATE_SPIKE_THRESHOLD_PERCENT / 100.0))
-        for entry in heart_rate_data:
-            recent_bpm = entry["bpm"]
-            timestamp = entry["timestamp"]
-            if recent_bpm > threshold:
-                print(
-                    f"Stress Alert! HR {recent_bpm} BPM at {timestamp} exceeds "
-                    f"{HEART_RATE_SPIKE_THRESHOLD_PERCENT}% threshold of {baseline_hr:.2f} BPM"
-                )
-
-        time.sleep(FETCH_INTERVAL)
-
-
-def poll_oura_daily_stress(user_id):
-    """
-    Periodically fetch daily stress data from Oura for a single user.
-    This runs, for instance, every 24 hours (or a smaller interval if you prefer).
-    """
-    from .oura_apiHeart import fetch_daily_stress  # Must come after the daily_stress logic
-
-    print(f"Starting daily-stress monitoring for user {user_id}...")
-
-    STRESS_FETCH_INTERVAL = 12 * 60 * 60  # 12 hours in seconds
-
-    while True:
-        print(f"\n Fetching daily-stress data for user: {user_id}")
-        stress_data = fetch_daily_stress(user_id)
-
-        if isinstance(stress_data, dict) and "error" in stress_data:
-            print(f"Error fetching daily stress for {user_id}: {stress_data['error']}")
+        if baseline_hr:
+            threshold = baseline_hr * (1 + HEART_RATE_SPIKE_THRESHOLD_PERCENT / 100.0)
+            for entry in hr_data:
+                if entry["bpm"] > threshold:
+                    print(
+                        f"Stress Alert! HR {entry['bpm']} BPM (threshold {threshold:.1f}) "
+                        f"for user {user_id} at {entry['timestamp']}"
+                    )
         else:
-            print(f"Fetched or updated {len(stress_data)} daily stress records for {user_id}.")
+            print(f"No baseline HR for user {user_id}, skipping stress detection.")
 
-        time.sleep(STRESS_FETCH_INTERVAL)  # Wait this time before fetching again -> change to cron later
+        await asyncio.sleep(FETCH_INTERVAL)
 
 
-@app.route("/data/real_time_heart_rate/<user_id>")
-def get_real_time_heart_rate(user_id):
+async def poll_oura_daily_stress(user_id: str):
     """
-    Return the latest heart-rate entry for the given user.
-    
-    :param user_id: The user to query in the heart_rate table.
-    :return: JSON with {bpm, timestamp} or an error if not found.
+    Periodically fetch daily stress data from Oura for the user.
+    Ensures we only fetch new data.
     """
-    with sqlite3.connect(DB_FILE) as db_conn:
-        db_cursor = db_conn.cursor()
-        db_cursor.execute(
-            "SELECT bpm, timestamp FROM heart_rate WHERE user_id = ? "
-            "ORDER BY timestamp DESC LIMIT 1",
-            (user_id,),
-        )
+    while True:
+        print(f"\nPolling daily stress for {user_id}")
 
-        row = db_cursor.fetchone()
+        # Get last_fetched_stress_at from DB
+        conn = sqlite3.connect(AUTH_DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("SELECT last_fetched_stress_at FROM user_tokens WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
 
-    if row:
-        return jsonify({"bpm": row[0], "timestamp": row[1]})
-    return jsonify({"error": f"No heart-rate data available for {user_id}"}), 404
+        last_fetched_stress_at = row[0] if row and row[0] else None
+
+        # Determine the start date for fetching
+        if last_fetched_stress_at:
+            start_date = (datetime.fromisoformat(last_fetched_stress_at) + timedelta(days=1)).strftime("%Y-%m-%d")
+            print(f"Using last_fetched_stress_at: {last_fetched_stress_at} (fetching from {start_date} onward)")
+        else:
+            start_date = (datetime.now(timezone.utc) - timedelta(days=BASELINE_STRESS_DAYS)).strftime("%Y-%m-%d")
+            print(f"No last_fetched_stress_at found; fetching last {BASELINE_STRESS_DAYS} days")
+
+        # Fetch new stress data
+        new_data = fetch_daily_stress_internal(user_id, start_date=start_date)
+
+        if new_data is None:
+            print(f"No new stress data found for {user_id}. Skipping update.")
+        else:
+            print(f"Retrieved {len(new_data)} new daily stress records for {user_id}")
+
+        await asyncio.sleep(STRESS_FETCH_INTERVAL)  # Wait before fetching again
 
 
-@app.route("/data/stress_baseline/<user_id>")
-def get_stress_baseline_endpoint(user_id):
+# Fast API endpoints
+@app.get("/data/stress_baseline")
+def get_stress_baseline_endpoint(authorization: str):
     """
-    Returns the rolling daily stress baseline for the last BASELINE_STRESS_DAYS days.
+    Return the rolling daily stress baseline for the last 29 days.
+    The user is identified by their Bearer token in 'authorization'.
     """
+    user_id = get_user_id_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+
     baseline_stress = get_dynamic_stress_baseline(user_id)
     if baseline_stress is None:
-        return jsonify({"error": f"No daily stress data for user: {user_id}"}), 404
+        raise HTTPException(status_code=404, detail="No daily stress data found")
 
-    return jsonify({
+    return {
         "user_id": user_id,
         "days_used": BASELINE_STRESS_DAYS,
         "stress_baseline": baseline_stress
-    })
+    }
 
-@app.route("/data/daily_stress/<user_id>")
-def get_daily_stress_records(user_id):
+
+@app.get("/data/real_time_heart_rate")
+def get_real_time_heart_rate(authorization: str):
     """
-    Returns all daily_stress entries for a user (e.g., last 30 days).
+    Return the latest heart-rate entry for a user identified by 'authorization' Bearer token.
     """
+    user_id = get_user_id_from_token(authorization)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid or missing token")
+
     with sqlite3.connect(DB_FILE) as db_conn:
         db_cursor = db_conn.cursor()
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
         db_cursor.execute(
             """
-            SELECT date, stress_high, recovery_high, day_summary
-            FROM daily_stress
+            SELECT bpm, timestamp FROM heart_rate
             WHERE user_id = ?
-              AND date >= ?
-            ORDER BY date DESC
+            ORDER BY timestamp DESC
+            LIMIT 1
             """,
-            (user_id, cutoff),
+            (user_id,),
         )
-        rows = db_cursor.fetchall()
+        row = db_cursor.fetchone()
 
-    if not rows:
-        return jsonify({"error": f"No daily stress data found for {user_id}"}), 404
+    if row:
+        return {"bpm": row[0], "timestamp": row[1]}
+    raise HTTPException(status_code=404, detail=f"No heart-rate data found for user {user_id}")
 
-    # Format data into list of dicts
-    stress_records = []
-    for (date_str, stress_high, recovery_high, day_summary) in rows:
-        stress_records.append({
-            "date": date_str,
-            "stress_high": stress_high,
-            "recovery_high": recovery_high,
-            "day_summary": day_summary
-        })
 
-    return jsonify({
-        "user_id": user_id,
-        "records": stress_records
-    })
+@app.get("/")
+def root():
+    """
+    Root endpoint
+    """
+    return {"message": "Welcome to the Oura Monitoring FastAPI app!"}
 
-if __name__ == "__main__":
-    # Only run the pollers once the Flask server is started (and not on debug reload).
-    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-        print("Checking if 14-day HR data already exists...")
-        print(f"Checking user tokens in {AUTH_DB_FILE}...")
+#  Startup Tasks
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    On startup, check for existing user tokens and start background pollers
+    for heart-rate and daily-stress data.
+    """
+    print("Checking user tokens in", AUTH_DB_FILE)
 
-        with sqlite3.connect(AUTH_DB_FILE) as auth_conn:
-            auth_cursor = auth_conn.cursor()
-            auth_cursor.execute("SELECT user_id FROM user_tokens")
-            active_users = [row[0] for row in auth_cursor.fetchall()]
+    if not os.path.exists(AUTH_DB_FILE):
+        print("No auth.db found. No tokens => no pollers.")
+        yield
+        return
 
-        if not active_users:
-            print("No active users found. Skipping HR data fetch.")
+    conn = sqlite3.connect(AUTH_DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM user_tokens")
+    active_users = [row[0] for row in cursor.fetchall()]
+    conn.close()
+
+    if not active_users:
+        print("No active users found. Skipping pollers.")
+        yield
+        return
+
+    # If user has no HR data, fetch initial
+    from main.oura_apiHeart import fetch_all_heart_rate_internal
+
+    for uid in active_users:
+        # Check if user already has HR data, if not then fetch HR data for user
+        with sqlite3.connect(DB_FILE) as hr_conn:
+            hr_cursor = hr_conn.cursor()
+            hr_cursor.execute("SELECT COUNT(*) FROM heart_rate WHERE user_id = ?", (uid,))
+            record_count = hr_cursor.fetchone()[0]
+
+        if record_count == 0:
+            print(f"Fetching initial HR data for user {uid}")
+            fetch_all_heart_rate_internal(uid)
         else:
-            # pylint: disable=import-outside-toplevel
-            from .oura_apiHeart import fetch_all_heart_rate  # Late import avoid circular dependency
+            print(f"14-day HR data already exists for user {uid}. Skipping initial fetch.")
 
-            for uid in active_users:
-                with sqlite3.connect(DB_FILE) as hr_conn:
-                    hr_cursor = hr_conn.cursor()
-                    hr_cursor.execute(
-                        "SELECT COUNT(*) FROM heart_rate WHERE user_id = ?",
-                        (uid,),
-                    )
-                    record_count = hr_cursor.fetchone()[0]
+        # Spin up background tasks for each user
+        asyncio.create_task(poll_oura_heart_rate(uid))
+        asyncio.create_task(poll_oura_daily_stress(uid))
+        yield
 
-                if record_count == 0:
-                    print(f"Fetching initial HR data for user {uid}...")
-                    fetch_all_heart_rate(uid)
-                else:
-                    print(f"14 day HR data already exists for user {uid}. Skipping fetch.")
-
-                fetch_thread = threading.Thread(
-                    target=poll_oura_heart_rate,
-                    args=(uid,),
-                    daemon=True
-                )
-                fetch_thread.start()
-
-                # Spin up thread to fetch daily stress data
-                # Fetches daily due to -> poll_oura_daily_stress
-                stress_thread = threading.Thread(
-                    target=poll_oura_daily_stress,
-                    args=(uid,),
-                    daemon=True
-                )
-                stress_thread.start()
-
-    app.run(debug=True, port=5001)
+app = FastAPI(lifespan=lifespan)

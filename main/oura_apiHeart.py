@@ -23,7 +23,6 @@ AUTH_DB_FILE = os.path.join(DB_DIR, "auth.db")
 os.makedirs(DB_DIR, exist_ok=True)
 
 # API configuration
-API_MODE = os.getenv("API_MODE")
 API_BASE_URL = os.getenv("REAL_API_BASE")
 
 # Constants
@@ -73,6 +72,56 @@ def init_db():
 
 # Ensure table is created before running any API operations
 init_db()
+
+
+def fetch_all_heart_rate_internal(user_id: str):
+    """
+    Internal function to fetch 14 days of heart rate data for `user_id`.
+    Does NOT require `authorization` header.
+    Uses `get_valid_access_token(user_id)` to retrieve the token from DB.
+    """
+
+    access_token = get_valid_access_token(user_id)
+    if not access_token:
+        print(f"No valid token for user {user_id}. Cannot fetch HR data.")
+        return
+
+    headers = {"Authorization": f"Bearer {access_token}"}
+    url = f"{API_BASE_URL}/heartrate"
+
+    start_datetime = (datetime.now(timezone.utc) - timedelta(days=BASELINE_DAYS)).isoformat()
+    end_datetime = datetime.now(timezone.utc).isoformat()
+    params = {"start_datetime": start_datetime, "end_datetime": end_datetime}
+
+    print(f"[Internal] Fetching HR data for user {user_id} from {start_datetime} to {end_datetime}")
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+        response.raise_for_status()
+    except requests.RequestException as e:
+        print(f"[Internal] Failed to fetch HR data for {user_id}: {str(e)}")
+        return
+
+    data = response.json().get("data", [])
+    if not data:
+        print(f"[Internal] No HR data returned for {user_id}")
+        return
+
+    # Filter out unwanted sources
+    filtered_data = [entry for entry in data if entry["source"] not in ["workout", "sleep"]]
+
+    # Store HR data
+    store_heart_rate(user_id, filtered_data)
+    print(f"[Internal] Stored {len(filtered_data)} HR records for user {user_id}")
+
+    #  Update last_fetched_at -> might not be needed if called from a scheduled task
+    if filtered_data:
+        latest_ts = max(entry["timestamp"] for entry in filtered_data)
+        with sqlite3.connect(AUTH_DB_FILE) as conn:
+            c = conn.cursor()
+            c.execute("UPDATE user_tokens SET last_fetched_at = ? WHERE user_id = ?", (latest_ts, user_id))
+            conn.commit()
+        print(f"[Internal] Updated last_fetched_at to {latest_ts} for user {user_id}")
 
 
 @router.get("/baseline-heart-rate")
@@ -125,29 +174,40 @@ def store_heart_rate(user_id, data):
     conn.close()
     cleanup_old_data()
 
-    print(f"{inserted_count} new HR records added to 'heart_rate' for user: {user_id}")
+    print(f"[store_heart_rate] Inserted {inserted_count} records for user {user_id}")
 
 
 @router.get("/daily-stress")
-def fetch_daily_stress(authorization: str = Header(None)):
+def fetch_daily_stress_route(authorization: str = Header(None)):
     """
-    Fetches daily stress data from the last known fetch date until 'today'.
-    If none is known, fetches the last 29 days.
+    Route-based function: requires an Authorization header from real HTTP calls.
+    Fetches daily stress data from Oura for the user in `authorization`.
     """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
     user_id = get_user_id_from_token(authorization)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid authorization token")
     
+    return fetch_daily_stress_internal(user_id)
+
+
+def fetch_daily_stress_internal(user_id: str, start_date: str):
+    """
+    Internal function to fetch daily stress data for `user_id`.
+    Does NOT require authorization header, uses `get_valid_access_token(user_id)`.
+    Perfect for pollers at startup.
+    """
     access_token = get_valid_access_token(user_id)
     if not access_token:
-        raise HTTPException(status_code=401, detail="Missing authentication token")
-    # Read last_fetched_stress_at from user_tokens
+        print(f"No valid token for user {user_id}. Cannot fetch daily stress data.")
+        return
+
+    # Retrieve last_fetched_stress_at from user_tokens
     conn = sqlite3.connect(AUTH_DB_FILE)
     cursor = conn.cursor()
-    cursor.execute("""
-        SELECT last_fetched_stress_at FROM user_tokens
-        WHERE user_id = ?
-    """, (user_id,))
+    cursor.execute("SELECT last_fetched_stress_at FROM user_tokens WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -155,13 +215,11 @@ def fetch_daily_stress(authorization: str = Header(None)):
 
     # Determine date range
     if last_fetched_stress_at:
-        # Convert to datetime.date
+        # Overlap logic => fetch from last_fetched_stress_at's date + 1 day
         last_date = datetime.fromisoformat(last_fetched_stress_at).date()
-        # Start from last_date + 1 day (avoid partial overlap)
         start_date = (last_date + timedelta(days=1)).strftime("%Y-%m-%d")
         print(f"Using last_fetched_stress_at: {last_fetched_stress_at} (fetching from {start_date} onward)")
     else:
-        # First time: fetch the last 29 days
         earliest_dt = datetime.now(timezone.utc) - timedelta(days=STRESS_DAYS)
         start_date = earliest_dt.strftime("%Y-%m-%d")
         print("No last_fetched_stress_at found; fetching last 29 days")
@@ -177,23 +235,21 @@ def fetch_daily_stress(authorization: str = Header(None)):
         response = requests.get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
     except requests.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch stress data: {str(e)}")
+        print(f"Failed to fetch stress data for {user_id}: {str(e)}")
+        return
 
     data = response.json().get("data", [])
     if not data:
-        return {"error": "No stress data returned from Oura API"}
+        print(f"No stress data returned from Oura for {user_id}")
+        return
 
     print(f"Retrieved {len(data)} stress records from Oura for {user_id}")
-    for entry in data:
-        print(f"Stress day: {entry['day']} - High: {entry['stress_high']} "
-              f"Recovery: {entry['recovery_high']} - Summary: {entry['day_summary']}")
 
     # Store in DB
     store_daily_stress(user_id, data)
 
-    # Update last_fetched_stress_at with the max "day" from data
-    # The Oura day is a string YYYY-MM-DD, so let's find the max date
-    max_day = max(record["day"] for record in data)  # e.g. "2025-02-27"
+    # Update last_fetched_stress_at with max "day" from data
+    max_day = max(record["day"] for record in data)
     print(f"Updating last_fetched_stress_at to {max_day} for user {user_id}")
 
     conn = sqlite3.connect(AUTH_DB_FILE)
@@ -253,24 +309,22 @@ def cleanup_old_data():
     conn.close()
 
 @router.get("/heart-rate")
-def fetch_all_heart_rate(authorization: str = Header(None)):
+def fetch_all_heart_rate_route(authorization: str = Header(None)):
     """
-    Fetches and stores the last 14 days of heart rate data from the Oura API.
-
-    Args:
-        user_id (str): The user identifier.
-
-    Returns:
-        dict | list: Returns a dictionary with an error message if authentication fails.
-                     Otherwise, returns a list of heart rate records.
+    Route-based function: requires an Authorization header from real HTTP calls.
+    Fetches 14 days of heart rate data from Oura API for the user in `authorization`.
     """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header missing")
+
     user_id = get_user_id_from_token(authorization)
     if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid authorization token")
+        raise HTTPException(status_code=401, detail="Invalid or expired authorization token")
 
     access_token = get_valid_access_token(user_id)
     if not access_token:
-        raise HTTPException(status_code=401, detail="Missing authentication token")
+        raise HTTPException(status_code=401, detail="Missing or invalid access token")
+
     headers = {"Authorization": f"Bearer {access_token}"}
     url = f"{API_BASE_URL}/heartrate"
 
@@ -278,13 +332,8 @@ def fetch_all_heart_rate(authorization: str = Header(None)):
     end_datetime = datetime.now(timezone.utc).isoformat()
     params = {"start_datetime": start_datetime, "end_datetime": end_datetime}
 
-    print(f"Fetching heart rate from {start_datetime} to {end_datetime} for user {user_id}")
+    print(f"[Route] Fetching HR data for user {user_id} from {start_datetime} to {end_datetime}")
 
-    # Explicitly handle non-200 responses
-    if response.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"Failed to fetch heart rate: {response.status_code}")
-
-    # Ensure the response contains valid JSON before proceeding
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10)
         response.raise_for_status()
@@ -292,30 +341,24 @@ def fetch_all_heart_rate(authorization: str = Header(None)):
         raise HTTPException(status_code=400, detail=f"Failed to fetch heart rate: {str(e)}")
 
     data = response.json().get("data", [])
-
     if not data:
         return {"error": "No heart rate data returned from Oura API"}
 
-    # Filter out unwanted sources (workout, sleep)
     filtered_data = [entry for entry in data if entry["source"] not in ["workout", "sleep"]]
     store_heart_rate(user_id, filtered_data)
 
-    print(f"Retrieved {len(filtered_data)} valid HR records from Oura for {user_id}")
+    print(f"[Route] Retrieved {len(filtered_data)} HR records for {user_id}")
 
+    # update last_fetched_at => again like above might be optional and not needed
     if filtered_data:
         latest_ts = max(entry["timestamp"] for entry in filtered_data)
         with sqlite3.connect(AUTH_DB_FILE) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE user_tokens
-                SET last_fetched_at = ?
-                WHERE user_id = ?
-            """, (latest_ts, user_id))
+            c = conn.cursor()
+            c.execute("UPDATE user_tokens SET last_fetched_at = ? WHERE user_id = ?", (latest_ts, user_id))
             conn.commit()
-        print(f"Set last_fetched_at to {latest_ts} for {user_id}.")
+        print(f"[Route] Updated last_fetched_at to {latest_ts} for user {user_id}")
 
     return filtered_data
-
 @router.get("/recent-heart-rate")
 def fetch_recent_heart_rate(user_id):
     """
