@@ -1,3 +1,26 @@
+1. In root directory run 
+
+uvicorn main.app:app --host 0.0.0.0 --port 5001 --reload
+
+2. Use curl to get link to login:
+
+in root dir run:
+
+curl -X GET "http://127.0.0.1:5001/auth/login"
+
+3. Check back in terminal that main.app step 1. is running, and open that termporary redirect link 
+
+4. Login with oura link, should try to redirect you to react native frontend (not setup yet)
+
+--> need to fix 1. (last prompt in ch)
+
+
+curl -X GET "http://127.0.0.1:5001/auth/user-info" -H "Authorization: Bearer <your_access_token>"
+
+can test endpoints in windows to make sure can connect from linux ide and windows emulator android studio:
+curl -H "Authorization: Bearer <your_access_token>" "https://api.ouraring.com/v2/usercollection/sleep?start_date=2024-02-15&end_date=2024-02-21"
+
+
 1.
 
 ```bash
@@ -15,6 +38,9 @@ Start new terminal in root:
 python -m main.app
 ```
 
+uvicorn main.app:app --host 0.0.0.0 --port 5001 --reload
+
+
 should create database and then continually look for new heart index every FETCH_INTERVAL (5 min oura api updates heart  -> put 1 min for testing)
 
 
@@ -27,7 +53,19 @@ user_id = session.get("user_id")
 access_token = get_valid_access_token(user_id)
 
 !!!!!!!!!!!!!!!
-currently if user has any amount of data in db it doesnt fetch updated data, it says 14 day HR data already exists for user user@gmail.com. Skipping fetch (need some way to dynamically handle this)
+fix last fetched at, not sure if its working
+
+
+
+# frontend
+npx react-native start
+
+for emulator open android studio:
+ ~/android-studio/bin/studio.sh
+
+
+install for oauth2 handling:
+npm install react-native-app-auth react-native-url-polyfill axios
 
 
 
@@ -62,6 +100,21 @@ TOKEN_URL=https://api.ouraring.com/oauth/token
 SECRET_KEY=superduper_ultra_secret_key_derp
 
 
+
+Cant use sessions with fastapi like we can in flask, so we need to use bearer tokens with oauth and bearer tokens. our client (react native app) authenticates by sending access tokens un authorization header
+
+TO DO LIST:
+-> need to switch from flask to fastapi since its not built for high concurrency, want to switch to fastapi since its asynchronous and flask is not (concurrency issues etc)
+-> background task processes -> use celery + redis. Celery for scheduled and real time task execution, and redis as message broker
+-> scaling concerns => we should only fetch heart rate data during school hours -> do batch requests outside of school hours / rate limit api calls to avoid Oura rate limit
+-> database optimizing: need indexing and partitioning to store large amounts of time series data
+-> use worker pools to process heart data instead of looping over users one by one, processes multiple users in parallel -> store last fetch timestamps to avoid redundant calls (do this already -> ensure it works)
+-> if user not wearing ring ensure that we do not fetch data for them (not sure how we do this yet)
+-> for daily stress data (every 24 hrs) -> scheduled as Celery periodic task running at midnight UTC (ensure that the data gets stored at midnight utc)
+-> WE NEED TO MAKE SURE THAT HEART RATE IS EVERY 5 MINUTES !!!!!!!!!!!!!!!! TO GET NOTIFICATIONS AND INFORM THE USER THAT THEY ARE STRESSED AND NEED TO RELAX
+
+-> use gRPC API calls for real time data retrieval 
+-> websockets for live updates on heart rate fluctuations 
 
 main.py
  fetch all heart rate, fetch_recent_heart_rate rely on get_valid_access_token from auth.py which is important since every time we fetch we get new or refreshed token if needed (good)

@@ -98,10 +98,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+origins = [
+    "http://localhost:3000",      # Expo Web (Browser Testing)
+    "exp://127.0.0.1:19000",      # Expo Go on Localhost
+    "http://10.0.2.2:3000",       # Android Emulator (Metro Bundler)
+    "http://192.168.X.X:3000",    # Real device -> not running
+    "yourapp://oauth-callback",   # Custom deep link for OAuth login
+]
 # CORS: allow React Native frontend to call API (modify security later)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # In production use frontend domain here
+    allow_origins=origins,   # In production use frontend domain here
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -200,8 +208,9 @@ async def poll_oura_heart_rate(user_id: str):
             for entry in hr_data:
                 if entry["bpm"] > threshold:
                     print(
-                        f"Stress Alert! HR {entry['bpm']} BPM (threshold {threshold:.1f}) "
-                        f"for user {user_id} at {entry['timestamp']}"
+                        # uncomment this later when fixed. prints too much currently
+                        # f"Stress Alert! HR {entry['bpm']} BPM (threshold {threshold:.1f}) "
+                        # f"for user {user_id} at {entry['timestamp']}"
                     )
         else:
             print(f"No baseline HR for user {user_id}, skipping stress detection.")
