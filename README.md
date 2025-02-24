@@ -1,3 +1,44 @@
+backend:
+
+uvicorn main.app:app --host 0.0.0.0 --port 5001 --reload
+
+
+frontend:
+
+in windows admin-
+netsh interface portproxy add v4tov4 listenport=5556 listenaddress=192.168.56.1 connectport=5555 connectaddress=127.0.0.1
+
+netsh interface portproxy show all
+
+then in fedora: run from OuraStressFrontend
+adb connect 192.168.56.1:5556
+adb devices
+adb reverse tcp:8081 tcp:8081
+
+then in fedora:
+
+npx react-native start
+
+then while thats running:
+
+npx react-native run-android
+
+THEN
+-> open dev menu in fedora
+to open dev menu:
+in fedora->
+adb shell input keyevent 82
+
+go to settings:
+enter:
+192.168.56.102:8081
+
+then reload (by going in dev menu opening it and reload)
+
+=> after making changes need to redo this:
+npx react-native run-android
+
+
 1. In root directory run 
 
 uvicorn main.app:app --host 0.0.0.0 --port 5001 --reload
