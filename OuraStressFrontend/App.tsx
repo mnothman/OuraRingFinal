@@ -5,8 +5,9 @@
  * @format
  */
 
-import React from 'react';
+import React, {useEffect} from 'react';
 import type {PropsWithChildren} from 'react';
+import 'url-search-params-polyfill';
 import {
   ScrollView,
   StatusBar,
@@ -14,6 +15,8 @@ import {
   Text,
   useColorScheme,
   View,
+  Alert,
+  Linking,
 } from 'react-native';
 
 import {
@@ -61,6 +64,36 @@ function App(): React.JSX.Element {
     backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
   };
 
+  // I added. Deep linking logic
+  useEffect(() => {
+    const handleDeepLink = (event: { url: string }) => {
+      const { url } = event;
+      // Example URL: myapp://oauth-callback?token=xxx&user=yyy
+      const [, queryString] = url.split('?');
+      const params = new URLSearchParams(queryString);
+      const token = params.get('token');
+      const user = params.get('user');
+
+      // Here store the token/user info but FOR NOW just update your app state
+      Alert.alert('Deep Link Received', `Token: ${token}\nUser: ${user}`);
+      // !!!!!!!!!!!!!!!! For production: save this data in secure storage or global state management
+    };
+
+    // Check if the app was opened via a deep link
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleDeepLink({ url });
+      }
+    });
+
+    // Listen for URL events while the app is running
+    const linkingSubscription = Linking.addEventListener('url', handleDeepLink);
+
+    return () => {
+      linkingSubscription.remove();
+    };
+  }, []);
+  
   /*
    * To keep the template simple and small we're adding padding to prevent view
    * from rendering under the System UI.
@@ -90,7 +123,7 @@ function App(): React.JSX.Element {
             paddingBottom: safePadding,
           }}>
           <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
+            Edit <Text style={styles.highlight}> ffff App.tsx</Text> to change this
             screen and then come back to see your edits.
           </Section>
           <Section title="See Your Changes">

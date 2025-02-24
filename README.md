@@ -33,11 +33,42 @@ go to settings:
 enter:
 192.168.56.102:8081
 
-then reload (by going in dev menu opening it and reload)
+then reload (by going in dev menu opening it and reload) or double tap R
 
 => after making changes need to redo this:
 npx react-native run-android
 
+
+
+
+Steps taken
+2/23
+-> use ngrok to expose local backend and get public url to put in .env and 
+-download and place my personal token in ngrok after signing up
+-expose backend locally running on port 5001: ngrok http 5001
+-this will start a tunnel and display public URL to put in REDIRECT_URI and also in Oura application
+
+=> implement deep linking for auth for tokens and user to redirect to app => app.tsx, androidmanifest.xml, and info.plist
+-need to install poly fill for urlsearchparams
+
+-> Testing deeplink. In linux terminal while app is running: 
+adb shell am start -a android.intent.action.VIEW -d "myapp://oauth-callback?token=testtoken\&user=testuser"
+
+In emulator recieved: 
+![Image](https://github.com/user-attachments/assets/6f6b443b-ddbc-4345-814f-066fb6627fb3)
+
+
+
+
+
+
+
+
+
+
+
+
+------------------------
 
 1. In root directory run 
 
