@@ -43,6 +43,7 @@ npx react-native run-android
 
 Steps taken
 2/23
+Deep link to handle tokens and redirects:
 -> use ngrok to expose local backend and get public url to put in .env and 
 -download and place my personal token in ngrok after signing up
 -expose backend locally running on port 5001: ngrok http 5001
@@ -51,6 +52,9 @@ Steps taken
 => implement deep linking for auth for tokens and user to redirect to app => app.tsx, androidmanifest.xml, and info.plist
 -need to install poly fill for urlsearchparams
 
+ngrok:
+https://15e3-73-151-240-60.ngrok-free.app
+
 -> Testing deeplink. In linux terminal while app is running: 
 adb shell am start -a android.intent.action.VIEW -d "myapp://oauth-callback?token=testtoken\&user=testuser"
 
@@ -58,8 +62,16 @@ In emulator recieved:
 ![Image](https://github.com/user-attachments/assets/6f6b443b-ddbc-4345-814f-066fb6627fb3)
 
 
+Handling login:
+-Created login.tsx
+-Modified app.tsx to incorporate login.tsx
+-In browser going to: https://15e3-73-151-240-60.ngrok-free.app/auth/login brings to Oura login page, so it works manually (not yet by clicking login in app -> later steps below)
+-Need to modify AndroidManifest.xml to declare queries scheme if calling Linking.canOpenURI() with HTTPS url for login url above
+-needed to modify backend auth.py to encode the redirect uri to resolve error 400 after logging in to Oura
 
-
+Changes to be made later:
+Instead of doing in memory is logged in or not in 'App.tsx' frontend -> make it connect to database to see if user has active token or not (logged in)
+-------------------
 
 
 

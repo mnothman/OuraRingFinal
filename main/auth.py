@@ -282,11 +282,15 @@ def login():
     state = secrets.token_urlsafe(16)
     store_oauth_state(state)
 
+    # fix error 400 redirect uri with possible encoding fix
+    encoded_redirect_uri = urllib.parse.quote(REDIRECT_URI, safe='')
+
     # Build the Oura auth URL
     auth_url = (
         f"{AUTHORIZATION_URL}?response_type=code"
         f"&client_id={CLIENT_ID}"
-        f"&redirect_uri={REDIRECT_URI}"
+        # f"&redirect_uri={REDIRECT_URI}"
+        f"&redirect_uri={encoded_redirect_uri}"
         f"&scope={SCOPES.replace(' ', '%20')}"
         f"&state={state}"
     )
