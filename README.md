@@ -1,4 +1,36 @@
+
+New steps:
+In backend/main:
+python -m uvicorn app:app --host 0.0.0.0 --port 5001 --reload
+
+In frontend:
+adb reverse tcp:8081 tcp:8081 (maybe not needed)
+npx expo start
+can also:
+npx expo start --clear
+
+-> click a to open in android emulator
+
+(
+& "C:\Users\Mohammad\AppData\Local\Android\Sdk\platform-tools\adb.exe" kill-server
+& "C:\Users\Mohammad\AppData\Local\Android\Sdk\platform-tools\adb.exe" start-server
+& "C:\Users\Mohammad\AppData\Local\Android\Sdk\platform-tools\adb.exe" reverse tcp:8081 tcp:8081
+)
+
+then m for dev menu:
+- Set Debug server host & port to: `10.0.2.2:8081`
+
+
+
+
 backend:
+pip install uvicorn fastapi
+pip install python-dotenv
+pip install pytz
+pip install sqlite3
+pip install requests
+
+
 
 uvicorn main.app:app --host 0.0.0.0 --port 5001 --reload
 

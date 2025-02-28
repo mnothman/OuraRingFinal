@@ -15,13 +15,14 @@ import pytz
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from flask_cors import CORS
 
-from .auth import router as auth_router
-from .oura_apiHeart import router as heart_router
+from auth import router as auth_router
+from oura_apiHeart import router as heart_router
 
 from dotenv import load_dotenv
-from .auth import get_user_id_from_token, get_valid_access_token
-from .oura_apiHeart import (
+from auth import get_user_id_from_token, get_valid_access_token
+from oura_apiHeart import (
     fetch_recent_heart_rate,
     fetch_daily_stress_internal,
 )
@@ -70,7 +71,7 @@ async def lifespan(app: FastAPI):
         return
 
     # If user has no HR data, fetch initial
-    from main.oura_apiHeart import fetch_all_heart_rate_internal
+    from oura_apiHeart import fetch_all_heart_rate_internal
 
     for uid in active_users:
         # Check if user already has HR data, if not then fetch HR data for user
@@ -98,14 +99,37 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# origins = [
+#     "http://localhost:3000",      # Expo Web (Browser Testing)
+#     "exp://127.0.0.1:19000",      # Expo Go on Localhost
+#     "http://10.0.2.2:3000",       # Android Emulator (Metro Bundler)
+#     "http://192.168.X.X:3000",    # Real device -> not running
+#     "yourapp://oauth-callback",   # Custom deep link for OAuth login
+# ]
+
+# origins = [
+#     "http://localhost:3000",
+#     "exp://127.0.0.1:19000",
+#     "exp://10.0.0.47:8081",     # Add your Metro URL
+#     "http://10.0.0.47:5001",
+#     "http://10.0.0.47:8081",    # Add your Metro URL
+#     "http://10.0.2.2:3000",
+#     "yourapp://oauth-callback"
+# ]
 
 origins = [
-    "http://localhost:3000",      # Expo Web (Browser Testing)
-    "exp://127.0.0.1:19000",      # Expo Go on Localhost
-    "http://10.0.2.2:3000",       # Android Emulator (Metro Bundler)
-    "http://192.168.X.X:3000",    # Real device -> not running
-    "yourapp://oauth-callback",   # Custom deep link for OAuth login
+    "http://localhost:3000",
+    "exp://127.0.0.1:19000",
+    "http://10.0.0.47:8081",     # Your FastAPI server URL
+    "exp://10.0.0.47:19000",     # Add your Expo development URL
+    "http://10.0.0.47:5001",     # Your FastAPI server URL
+    "exp://10.0.0.47:19000/--/auth/callback",  # Add your callback URL
+    "http://10.0.0.47:5001/auth/callback",     # Add your callback URL
+    "https://84a5-2601-207-380-fb60-c174-e3cf-82ac-25ff.ngrok-free.app/auth/callback",
+    "https://84a5-2601-207-380-fb60-c174-e3cf-82ac-25ff.ngrok-free.app",
+    "yourapp://oauth-callback",
 ]
+
 # CORS: allow React Native frontend to call API (modify security later)
 app.add_middleware(
     CORSMiddleware,

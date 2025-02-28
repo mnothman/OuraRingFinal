@@ -8,7 +8,7 @@ import sqlite3
 import requests
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
-from .auth import get_valid_access_token, get_user_id_from_token
+from auth import get_valid_access_token, get_user_id_from_token
 from fastapi import APIRouter, Header, HTTPException
 
 # Load environment variables

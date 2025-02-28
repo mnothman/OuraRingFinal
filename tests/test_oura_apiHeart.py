@@ -58,7 +58,7 @@ def mock_token(mocker):
     """
     Mocks get_valid_access_token to always return "TEST_TOKEN" unless overridden.
     """
-    return mocker.patch("main.oura_apiHeart.get_valid_access_token", return_value="TEST_TOKEN")
+    return mocker.patch("oura_apiHeart.get_valid_access_token", return_value="TEST_TOKEN")
 
 
 def test_init_db_structure(fresh_db):
@@ -232,7 +232,7 @@ def test_fetch_all_heart_rate_missing_token(fresh_db, mocker):
     """
     If get_valid_access_token returns None, we expect an error.
     """
-    mocker.patch("main.oura_apiHeart.get_valid_access_token", return_value=None)
+    mocker.patch("oura_apiHeart.get_valid_access_token", return_value=None)
     result = oura_apiHeart.fetch_all_heart_rate("failuser@example.com")
     assert result["error"] == "Missing authentication token"
 
@@ -241,7 +241,7 @@ def test_fetch_recent_heart_rate_missing_token(fresh_db, fresh_auth_db, mocker):
     """
     If get_valid_access_token returns None, we expect an error.
     """
-    mocker.patch("main.oura_apiHeart.get_valid_access_token", return_value=None)
+    mocker.patch("oura_apiHeart.get_valid_access_token", return_value=None)
     result = oura_apiHeart.fetch_recent_heart_rate("failuser@example.com")
     assert result["error"] == "Missing authentication token"
 

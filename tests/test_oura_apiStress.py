@@ -8,10 +8,10 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 try:
-    import main.oura_apiHeart
-    oura_apiHeart = main.oura_apiHeart
+    import oura_apiHeart
+    oura_apiHeart = oura_apiHeart
 except ModuleNotFoundError as e:
-    print("Import Error: Could not find `main.oura_apiHeart`.")
+    print("Import Error: Could not find `oura_apiHeart`.")
     print(f"Debug Info: sys.path = {sys.path}")
     raise e
 
@@ -58,7 +58,7 @@ def mock_token(mocker):
     """
     Mocks get_valid_access_token to always return "TEST_TOKEN" unless overridden.
     """
-    return mocker.patch("main.oura_apiHeart.get_valid_access_token", return_value="TEST_TOKEN")
+    return mocker.patch("oura_apiHeart.get_valid_access_token", return_value="TEST_TOKEN")
 
 
 def test_daily_stress_db_structure(fresh_db):
@@ -191,7 +191,7 @@ def test_fetch_daily_stress_missing_token(fresh_db, mocker):
     """
     If get_valid_access_token returns None, we expect an error from fetch_daily_stress.
     """
-    mocker.patch("main.oura_apiHeart.get_valid_access_token", return_value=None)
+    mocker.patch("oura_apiHeart.get_valid_access_token", return_value=None)
     result = oura_apiHeart.fetch_daily_stress("no_token@example.com")
     assert result["error"] == "Missing authentication token"
 

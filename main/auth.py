@@ -289,7 +289,6 @@ def login():
     auth_url = (
         f"{AUTHORIZATION_URL}?response_type=code"
         f"&client_id={CLIENT_ID}"
-        # f"&redirect_uri={REDIRECT_URI}"
         f"&redirect_uri={encoded_redirect_uri}"
         f"&scope={SCOPES.replace(' ', '%20')}"
         f"&state={state}"

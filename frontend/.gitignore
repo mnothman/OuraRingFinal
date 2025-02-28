@@ -30,7 +30,7 @@ OuraRingfinal/frontend/.expo/
 node_modules/
 OuraRingFinal/frontend/node_modules/
 OuraRingFinal\frontend\node_modules\
-OuraRingFinal\frontend\node_modules
+
 
 -------
 # Dependencies
@@ -45,7 +45,7 @@ npm-debug.*
 *.mobileprovision
 *.orig.*
 web-build/
-
+OuraRingFinal\frontend\node_modules
 # Environment
 .env
 .env.local
