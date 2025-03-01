@@ -8,7 +8,7 @@ adb reverse tcp:8081 tcp:8081 (maybe not needed)
 npx expo start
 can also:
 npx expo start --clear
-
+npm expo start --clear
 -> click a to open in android emulator
 
 (

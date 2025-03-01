@@ -1,12 +1,13 @@
 {
   "expo": {
-    "name": "oura-ring-app",
-    "scheme": "myapp",
-    "slug": "oura-ring-app",
+    "name": "OuraRing",
+    "slug": "OuraRing",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -14,12 +15,22 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.ouraring",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-      }
+      },
+      "package": "com.yourcompany.ouraring"
+    },
+    "scheme": "myapp",
+    "web": {
+      "favicon": "./assets/favicon.png"
     }
   }
-} 
+}

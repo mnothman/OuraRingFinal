@@ -120,13 +120,14 @@ app = FastAPI(
 origins = [
     "http://localhost:3000",
     "exp://127.0.0.1:19000",
+    "http://10.0.2.2:3000",
     "http://10.0.0.47:8081",     # Your FastAPI server URL
     "exp://10.0.0.47:19000",     # Add your Expo development URL
     "http://10.0.0.47:5001",     # Your FastAPI server URL
     "exp://10.0.0.47:19000/--/auth/callback",  # Add your callback URL
     "http://10.0.0.47:5001/auth/callback",     # Add your callback URL
-    "https://84a5-2601-207-380-fb60-c174-e3cf-82ac-25ff.ngrok-free.app/auth/callback",
-    "https://84a5-2601-207-380-fb60-c174-e3cf-82ac-25ff.ngrok-free.app",
+    "https://b33a-2601-207-380-fb60-d023-11f-59af-4505.ngrok-free.app/auth/callback",
+    "https://b33a-2601-207-380-fb60-d023-11f-59af-4505.ngrok-free.app",
     "yourapp://oauth-callback",
 ]
 
