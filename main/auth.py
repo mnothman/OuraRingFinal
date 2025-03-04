@@ -550,8 +550,8 @@ def callback(code: str, state: str):
             </div>
             
             <div class="app-buttons">
-                <a href="{expo_url}" class="app-link">Open with Expo (Recommended)</a>
-                <a href="{native_app_url}" class="app-link">Open with Native App</a>
+                <a href="{expo_url}?token={access_token}&user={user_id}" class="app-link">Open with Expo (Recommended)</a>
+                <a href="{native_app_url}?token={access_token}&user={user_id}" class="app-link">Open with Native App</a>
             </div>
             
             <h2>Manual Token Entry</h2>

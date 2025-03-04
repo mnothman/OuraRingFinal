@@ -14,6 +14,48 @@ const LoginScreen = ({ navigation }: { navigation: any }) => {
   const [showWarning, setShowWarning] = useState<boolean>(false);
 
   useEffect(() => {
+    // Add URL listener for handling deep links
+    const handleUrl = async ({ url }: { url: string }) => {
+      console.log('Received URL in LoginScreen:', url);
+      setDebugInfo(prev => `${prev}\nReceived URL: ${url}`);
+
+      try {
+        // Parse the URL to get the token and user
+        const parsedUrl = Linking.parse(url);
+        console.log('Parsed URL:', parsedUrl);
+        
+        if (parsedUrl.queryParams?.token && parsedUrl.queryParams?.user) {
+          const { token, user } = parsedUrl.queryParams;
+          
+          // Store credentials
+          await SecureStore.setItemAsync('oauth_token', token.toString());
+          await SecureStore.setItemAsync('user_id', user.toString());
+          
+          console.log('Credentials stored, navigating to Test screen...');
+          setDebugInfo(prev => `${prev}\nCredentials stored, navigating...`);
+          
+          // Navigate to test screen
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'Test' }],
+          });
+        }
+      } catch (error) {
+        console.error('Error handling deep link:', error);
+        setDebugInfo(prev => `${prev}\nDeep link error: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+
+    // Set up URL listeners
+    const subscription = Linking.addEventListener('url', handleUrl);
+
+    // Check for initial URL (in case app was opened with URL)
+    Linking.getInitialURL().then(url => {
+      if (url) {
+        handleUrl({ url });
+      }
+    });
+
     // Log some debug info on mount
     const logDebugInfo = async () => {
       try {
@@ -44,7 +86,12 @@ const LoginScreen = ({ navigation }: { navigation: any }) => {
     };
     
     logDebugInfo();
-  }, []);
+
+    // Cleanup subscription
+    return () => {
+      subscription.remove();
+    };
+  }, [navigation]);
 
   const handleLogin = async () => {
     try {
