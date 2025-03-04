@@ -9,7 +9,7 @@ interface HeartRateData {
   timestamp: string;
 }
 
-const BACKEND_URL = Constants.expoConfig?.extra?.backendUrl || 'https://b33a-2601-207-380-fb60-d023-11f-59af-4505.ngrok-free.app';
+const BACKEND_URL = Constants.expoConfig?.extra?.backendUrl || 'https://d03b-2601-207-380-fb60-9996-b006-c610-fbd5.ngrok-free.app';
 
 const RealtimeHeartRateScreen = ({ navigation }: { navigation: any }) => {
   const [heartRateData, setHeartRateData] = useState<HeartRateData | null>(null);

@@ -28,6 +28,6 @@ export default {
   web: {
   },
   extra: {
-    backendUrl: 'https://b33a-2601-207-380-fb60-d023-11f-59af-4505.ngrok-free.app'
+    backendUrl: 'https://d03b-2601-207-380-fb60-9996-b006-c610-fbd5.ngrok-free.app'
   }
 };

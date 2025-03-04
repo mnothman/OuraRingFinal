@@ -126,8 +126,8 @@ origins = [
     "http://10.0.0.47:5001",     # Your FastAPI server URL
     "exp://10.0.0.47:19000/--/auth/callback",  # Add your callback URL
     "http://10.0.0.47:5001/auth/callback",     # Add your callback URL
-    "https://b33a-2601-207-380-fb60-d023-11f-59af-4505.ngrok-free.app/auth/callback",
-    "https://b33a-2601-207-380-fb60-d023-11f-59af-4505.ngrok-free.app",
+    "https://d03b-2601-207-380-fb60-9996-b006-c610-fbd5.ngrok-free.app/auth/callback",
+    "https://d03b-2601-207-380-fb60-9996-b006-c610-fbd5.ngrok-free.app",
     "yourapp://oauth-callback",
 ]
 

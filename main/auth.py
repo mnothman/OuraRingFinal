@@ -15,7 +15,7 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv, dotenv_values
 from fastapi import FastAPI, HTTPException, Depends, Query
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from fastapi.security.utils import get_authorization_scheme_param
@@ -298,59 +298,297 @@ def login():
 
 # need to redirect to react native app here ex. return RedirectResponse(url=f"https://my-app.com/oauth-callback?token={access_token}")
 @router.get("/callback")
-def callback(code: str, state: Optional[str] = None):
+def callback(code: str, state: str):
     """
-    Oura redirects back with `code` and `state` after user logs in.
-    We verify the `state` from DB, then exchange the code for tokens, store them, and return to client.
+    OAuth2 callback endpoint that exchanges the code for an access token
+    and redirects the user back to the frontend.
     """
-    if not state or not verify_and_remove_oauth_state(state):
+    # Verify the state to prevent CSRF
+    if not verify_and_remove_oauth_state(state):
         return JSONResponse(
             status_code=400,
-            content={"error": "Invalid or expired state. CSRF check failed."}
+            content={"error": "Invalid or expired state. Please try again."}
         )
 
-    # Exchange authorization code for tokens
-    token_data = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": REDIRECT_URI,
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET
-    }
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    resp = requests.post(TOKEN_URL, data=token_data, headers=headers, timeout=10)
-    if resp.status_code != 200:
+    try:
+        # Exchange the code for a token
+        response = requests.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "redirect_uri": REDIRECT_URI,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
+        
+        # Log the response for debugging
+        print(f"Token exchange response: {response.status_code}")
+        
+        if response.status_code != 200:
+            print(f"Error response: {response.text}")
+            return JSONResponse(
+                status_code=response.status_code,
+                content={"error": f"Token exchange failed: {response.text}"}
+            )
+        
+        # Parse the response
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        refresh_token = token_data.get("refresh_token")
+        expires_in = token_data.get("expires_in", 86400)  # Default to 24 hours
+        
+        # Fetch user information to get user_id (email)
+        user_response = requests.get(
+            USER_INFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        
+        print(f"User info response status: {user_response.status_code}")
+        
+        # Default user_id to a generated value in case we can't get the email
+        user_id = None
+        
+        if user_response.status_code == 200:
+            try:
+                user_data = user_response.json()
+                print(f"User data response: {user_data}")
+                
+                # Try different paths to find the email in the response
+                if "data" in user_data and "email" in user_data["data"]:
+                    user_id = user_data["data"]["email"]
+                elif "data" in user_data and isinstance(user_data["data"], list) and len(user_data["data"]) > 0:
+                    # If data is a list, try the first item
+                    item = user_data["data"][0]
+                    if "email" in item:
+                        user_id = item["email"]
+                elif "email" in user_data:
+                    # Direct email field
+                    user_id = user_data["email"]
+                
+                print(f"Extracted user_id (email): {user_id}")
+            except Exception as e:
+                print(f"Error parsing user data: {str(e)}")
+        else:
+            print(f"Error fetching user info: {user_response.text}")
+        
+        # If we couldn't get the email, generate a unique ID based on the access token
+        if not user_id:
+            print("Could not extract email from user data, using a generated ID instead")
+            # Use the first 8 characters of the access token as a user ID
+            user_id = f"user_{access_token[:8]}"
+            print(f"Generated user_id: {user_id}")
+        
+        # Store tokens in the database
+        expires_at = int(datetime.utcnow().timestamp()) + expires_in
+        store_token(user_id, access_token, refresh_token, expires_at)
+        print(f"Stored tokens for user: {user_id}")
+        
+        # Create URLs for both Expo and native app
+        native_app_url = f"myapp://oauth-callback?token={access_token}&user={user_id}"
+        
+        # Use the IP address from the Expo development server
+        # This should match what you see in your Expo dev server output
+        expo_url = f"exp://10.0.0.47:8081/--/oauth-callback?token={access_token}&user={user_id}"
+        
+        print(f"Redirecting to multiple app URL options")
+        
+        # Return HTML with buttons/links for different URL schemes
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Login Successful</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 20px;
+                    text-align: center;
+                }}
+                h1 {{
+                    color: #4CAF50;
+                }}
+                .info {{
+                    background-color: #f8f8f8;
+                    border-radius: 5px;
+                    padding: 15px;
+                    margin: 20px 0;
+                    text-align: left;
+                }}
+                .token-box {{
+                    background-color: #f1f1f1;
+                    border: 1px solid #ddd;
+                    padding: 10px;
+                    border-radius: 5px;
+                    font-family: monospace;
+                    font-size: 12px;
+                    overflow-wrap: break-word;
+                    margin: 10px 0;
+                    text-align: left;
+                    position: relative;
+                }}
+                button {{
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 10px 15px;
+                    text-align: center;
+                    text-decoration: none;
+                    display: inline-block;
+                    font-size: 16px;
+                    margin: 10px 2px;
+                    cursor: pointer;
+                    border-radius: 5px;
+                }}
+                .copy-btn {{
+                    position: absolute;
+                    right: 5px;
+                    top: 5px;
+                    background-color: #555;
+                    color: white;
+                    border: none;
+                    padding: 3px 8px;
+                    font-size: 12px;
+                    cursor: pointer;
+                    border-radius: 3px;
+                }}
+                .important {{
+                    color: #d32f2f;
+                    font-weight: bold;
+                }}
+                .highlight-box {{
+                    background-color: #fffde7;
+                    border-left: 4px solid #fbc02d;
+                    padding: 15px;
+                    margin: 20px 0;
+                    text-align: left;
+                }}
+                .instruction-step {{
+                    margin: 10px 0;
+                    padding-left: 20px;
+                    position: relative;
+                }}
+                .instruction-step:before {{
+                    content: "";
+                    position: absolute;
+                    left: 0;
+                    top: 6px;
+                    width: 12px;
+                    height: 12px;
+                    background-color: #4CAF50;
+                    border-radius: 50%;
+                }}
+                .app-buttons {{
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                    margin: 20px 0;
+                }}
+                .app-link {{
+                    background-color: #2196F3;
+                    color: white;
+                    text-decoration: none;
+                    padding: 12px;
+                    border-radius: 5px;
+                    display: block;
+                }}
+                img {{
+                    max-width: 100%;
+                    border: 1px solid #ddd;
+                    border-radius: 5px;
+                    margin: 10px 0;
+                }}
+            </style>
+            <script>
+                function copyToClipboard(text, elementId) {{
+                    navigator.clipboard.writeText(text).then(function() {{
+                        document.getElementById(elementId).innerText = "Copied!";
+                        setTimeout(function() {{
+                            document.getElementById(elementId).innerText = "Copy";
+                        }}, 2000);
+                    }}).catch(function(err) {{
+                        console.error('Could not copy text: ', err);
+                    }});
+                }}
+                
+                // We're disabling automatic redirection to prevent app disconnection
+                // Instead, we'll instruct users to manually click the "Open with Expo" button
+                /*
+                setTimeout(function() {{
+                    window.location.href = "{native_app_url}";
+                    setTimeout(function() {{
+                        window.location.href = "{expo_url}";
+                    }}, 1000);
+                }}, 1500);
+                */
+            </script>
+        </head>
+        <body>
+            <h1>Login Successful!</h1>
+            <p>Your login was successful. You're almost ready to use the app!</p>
+            
+            <div class="highlight-box">
+                <h3>🔹 IMPORTANT: How to Return to the App</h3>
+                <p>For the best experience, please <span class="important">do NOT use automatic redirection</span>. Instead:</p>
+                
+                <div class="instruction-step">
+                    When Chrome asks "Open with Expo", click that option. This maintains your app's connection to the development server.
+                </div>
+                
+                <div class="instruction-step">
+                    If you don't see that option, click one of the buttons below, then select "Open with Expo" when prompted.
+                </div>
+                
+                <div class="instruction-step">
+                    If you still have issues, use the manual token entry option in the app.
+                </div>
+            </div>
+            
+            <div class="app-buttons">
+                <a href="{expo_url}" class="app-link">Open with Expo (Recommended)</a>
+                <a href="{native_app_url}" class="app-link">Open with Native App</a>
+            </div>
+            
+            <h2>Manual Token Entry</h2>
+            <p>If the buttons above don't work, copy these values and enter them manually in the app:</p>
+            
+            <h3>Access Token</h3>
+            <div class="token-box">
+                {access_token}
+                <button id="token-btn" class="copy-btn" onclick="copyToClipboard('{access_token}', 'token-btn')">Copy</button>
+            </div>
+            
+            <h3>User Email</h3>
+            <div class="token-box">
+                {user_id}
+                <button id="email-btn" class="copy-btn" onclick="copyToClipboard('{user_id}', 'email-btn')">Copy</button>
+            </div>
+            
+            <div class="info">
+                <p><strong>Troubleshooting:</strong></p>
+                <p>If you're having trouble returning to the app:</p>
+                <ol>
+                    <li>Make sure your Expo development server is still running</li>
+                    <li>Try reopening the Expo Go app manually</li>
+                    <li>Use the manual token entry feature on the login screen</li>
+                </ol>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return HTMLResponse(content=html_content)
+    except Exception as e:
+        print(f"Exception in OAuth callback: {str(e)}")
         return JSONResponse(
-            status_code=400,
-            content={"error": "Failed to obtain access token", "details": resp.text},
+            status_code=500,
+            content={"error": f"Failed to process OAuth callback: {str(e)}"}
         )
-
-    tokens = resp.json()
-    access_token = tokens["access_token"]
-    refresh_token = tokens["refresh_token"]
-    expires_in = tokens["expires_in"]
-    expires_at = int(datetime.utcnow().timestamp()) + expires_in
-
-    # (Optional) call Oura user endpoint to get user ID / email
-    user_id = fetch_oura_user_email(access_token)
-    if not user_id:
-        return JSONResponse(status_code=400, content={"error": "Failed to fetch user info from Oura"})
-
-    # Store the tokens in DB
-    store_token(user_id, access_token, refresh_token, expires_at)
-    print(f"Stored tokens for user: {user_id}")
-
-    # Return tokens to client (or do an additional redirect to your React app)
-    # !!!!!!!!!!!!!!!!! INSTEAD OF RETURNING HERE, NEED TO REDIRECT TO REACT NATIVE APP WITH DEEP LINKING
-    mobile_app_url = f"myapp://oauth-callback?token={access_token}&user={user_id}"
-
-    return RedirectResponse(url=mobile_app_url)
-    # return {
-    #     "message": "Login successful",
-    #     "user_id": user_id,
-    #     "access_token": access_token,
-    #     "expires_in": expires_in
-    # }
 
 def fetch_oura_user_email(access_token: str) -> Optional[str]:
     """

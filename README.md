@@ -11,6 +11,28 @@ npx expo start --clear
 npm expo start --clear
 -> click a to open in android emulator
 
+Might have to do this in cmd prompt admin (all outside ide terminal):
+
+# Keep the port proxy setup
+netsh interface portproxy add v4tov4 listenport=5556 listenaddress=192.168.56.1 connectport=5555 connectaddress=127.0.0.1
+
+# Confirm the connection
+adb connect 192.168.56.1:5556
+
+# Set up reverse port forwarding for the specific device
+adb -s 192.168.56.1:5556 reverse tcp:8081 tcp:8081
+
+# You can check the reverse setup
+adb -s 192.168.56.1:5556 reverse --list
+
+
+
+
+
+
+
+
+
 (
 & "C:\Users\Mohammad\AppData\Local\Android\Sdk\platform-tools\adb.exe" kill-server
 & "C:\Users\Mohammad\AppData\Local\Android\Sdk\platform-tools\adb.exe" start-server
